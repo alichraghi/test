@@ -1,24 +1,23 @@
 const std = @import("std");
 const IO = @import("iofthetiger").IO;
-const allocator = @import("main.zig").allocator;
 
 const os = std.os;
 const log = std.log.scoped(.http);
 
-const Server = @This();
+const HTTPServer = @This();
 
 const kernel_backlog = 128;
-const recv_buf_len = 512;
+const recv_buf_len = std.mem.page_size;
 const io_entries = 256;
 
+allocator: std.mem.Allocator,
 io: IO,
 address: std.net.Address,
 socket: os.socket_t,
 accepting: bool = true,
 
-pub fn init(ip: [4]u8, port: u16) !Server {
+pub fn init(allocator: std.mem.Allocator, address: std.net.Address) !HTTPServer {
     var io = try IO.init(io_entries, 0);
-    const address = std.net.Address.initIp4(ip, port);
     const socket = try io.open_socket(address.any.family, os.SOCK.STREAM, os.IPPROTO.TCP);
     try os.setsockopt(socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
     try os.bind(socket, &address.any, address.getOsSockLen());
@@ -27,21 +26,22 @@ pub fn init(ip: [4]u8, port: u16) !Server {
     log.info("HTTP Server is listening on {}.", .{address});
 
     return .{
+        .allocator = allocator,
         .io = io,
         .address = address,
         .socket = socket,
     };
 }
 
-pub fn deinit(server: *Server) void {
+pub fn deinit(server: *HTTPServer) void {
     os.close(server.socket);
     server.io.deinit();
 }
 
-pub fn tick(server: *Server) !void {
+pub fn tick(server: *HTTPServer) !void {
     // Start accepting.
     var acceptor_completion: IO.Completion = undefined;
-    server.io.accept(*Server, server, accept_callback, &acceptor_completion, server.socket);
+    server.io.accept(*HTTPServer, server, accept_callback, &acceptor_completion, server.socket);
 
     // Wait while accepting.
     while (server.accepting) try server.io.tick();
@@ -50,15 +50,16 @@ pub fn tick(server: *Server) !void {
 }
 
 fn accept_callback(
-    server: *Server,
+    server: *HTTPServer,
     completion: *IO.Completion,
     result: IO.AcceptError!os.socket_t,
 ) void {
     _ = completion;
 
     // Allocate and init new client.
-    const client = allocator.create(Client) catch unreachable;
+    const client = server.allocator.create(Client) catch unreachable;
     client.* = .{
+        .server = server,
         .io = &server.io,
         .socket = result catch @panic("accept error"),
     };
@@ -77,6 +78,7 @@ fn accept_callback(
 }
 
 const Client = struct {
+    server: *HTTPServer,
     io: *IO,
     socket: os.socket_t,
     completion: IO.Completion = undefined,
@@ -112,7 +114,7 @@ fn recv_callback(
         \\Keep-Alive: timeout=1
         \\Content-Type: text/plain
         \\Content-Length: 6
-        \\Server: server/0.1.0
+        \\HTTPServer: server/0.1.0
         \\
         \\Hello
         \\
@@ -152,5 +154,5 @@ fn close_callback(
 ) void {
     _ = completion;
     _ = result catch @panic("close_callback");
-    allocator.destroy(client);
+    client.server.allocator.destroy(client);
 }

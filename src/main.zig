@@ -1,79 +1,49 @@
-// const std = @import("std");
-// const RTMPServer = @import("RTMPServer.zig");
-
-// var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-
-// pub const allocator = gpa.allocator();
-
-// pub fn main() !void {
-//     defer _ = gpa.deinit();
-//     try rtmp_main();
-// }
-
-// pub var rtmp_server: RTMPServer = undefined;
-// fn rtmp_main() !void {
-//     rtmp_server = try RTMPServer.init(.{ 127, 0, 0, 1 }, 1935);
-//     defer rtmp_server.deinit();
-
-//     while (true) {
-//         try rtmp_server.tick();
-//     }
-// }
-
-// SRT
-
 const std = @import("std");
-// const IO = @import("iofthetiger").IO;
-// const Server = @import("Server.zig");
+const IO = @import("iofthetiger").IO;
+const HTTPServer = @import("HTTPServer.zig");
 const SRTServer = @import("SRTServer.zig");
 
-var running = true;
-// var fba_buf: [8 * 1024 * 1024 * 1024]u8 = undefined;
-// var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+const log = std.log.scoped(.gael);
 
-pub const allocator = gpa.allocator();
+var running = std.atomic.Value(bool).init(true);
 
 pub fn main() !void {
-    defer _ = gpa.deinit();
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // defer _ = gpa.deinit();
+    // const allocator = gpa.allocator();
 
-    var srt_server = try SRTServer.init(.{ 127, 0, 0, 1 }, 1935);
-    defer srt_server.deinit();
+    var fba_buf: [8 * 1024 * 1024]u8 = undefined; // 8MB
+    var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+    const allocator = fba.allocator();
 
-    // const http_thread = try std.Thread.spawn(.{}, http_handler, .{&srt_server});
-    // defer http_thread.join();
+    const srt_thread = try std.Thread.spawn(.{}, srt_server_thread, .{});
+    defer srt_thread.join();
 
-    while (true) {
-        try srt_server.tick();
+    const http_address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 8000);
+    var http_server = try HTTPServer.init(allocator, http_address);
+    defer http_server.deinit();
+
+    while (running.load(.Monotonic)) {
+        try http_server.tick();
     }
 }
 
-fn http_handler(srt: *SRTServer) !void {
-    _ = srt;
-    const addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 8080);
-    var http_server = try addr.listen(.{ .reuse_address = true });
-    while (true) {
-        const conn = try http_server.accept();
-        _ = try std.Thread.spawn(.{}, conn_handler, .{conn});
-    }
-}
+fn srt_server_thread() void {
+    var fba_buf: [8 * 1024 * 1024]u8 = undefined; // 8MB
+    var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
+    const allocator = fba.allocator();
 
-fn conn_handler(conn: std.net.Server.Connection) !void {
-    var send_buf: [2 * 1024 * 1024]u8 = undefined;
-    var read_buf: [2 * 1024 * 1024]u8 = undefined;
-
-    var buf: [1 * 1024 * 1024]u8 = undefined;
-    var http_conn = std.http.Server.init(conn, &buf);
-    var req = try http_conn.receiveHead();
-    const file = std.fs.cwd().openFile(req.head.target[1..], .{}) catch {
-        try req.respond("404", .{ .status = .not_found });
+    const srt_address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9000);
+    var srt_server = SRTServer.init(allocator, srt_address) catch |err| {
+        log.err("Initializing SRT Server failed: {s}", .{@errorName(err)});
+        running.store(false, .Monotonic);
         return;
     };
-    var resp = req.respondStreaming(.{ .send_buffer = &send_buf, .respond_options = .{ .transfer_encoding = .chunked } });
-    while (true) {
-        const read = file.read(&read_buf) catch break;
-        if (read == 0) break;
-        _ = try resp.write(read_buf[0..read]);
+    defer srt_server.deinit();
+
+    while (running.load(.Monotonic)) {
+        srt_server.tick() catch |err| {
+            log.warn("SRT Server: {s}", .{@errorName(err)});
+        };
     }
-    try resp.end();
 }
