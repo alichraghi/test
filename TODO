@@ -1,0 +1,6 @@
+[ ] Multi-threading in SRT
+[ ] Serve files in HTTP Server
+[ ] REST API in HTTP Server
+    - [ ] Setup a DB
+    - [ ] Authentication
+[ ] FrontEnd
