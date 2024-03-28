@@ -16,7 +16,7 @@ const log = std.log.scoped(.remuxer);
 
 mutex: std.Thread.Mutex = .{},
 cond: std.Thread.Condition = .{},
-done: std.atomic.Value(bool) = .{ .raw = false },
+running: std.atomic.Value(bool) = .{ .raw = false },
 allocator: std.mem.Allocator,
 ring_buffer: RingBuffer,
 
@@ -158,13 +158,13 @@ pub fn remux(remuxer: *Remuxer, output_path: [:0]const u8) !void {
 }
 
 pub fn stop(remuxer: *Remuxer) void {
-    remuxer.done.store(true, .SeqCst);
+    remuxer.running.store(false, .release);
 }
 
 pub fn write(remuxer: *Remuxer, slice: []const u8) !void {
     remuxer.mutex.lock();
     while (remuxer.ring_buffer.writableLength() < slice.len) {
-        if (remuxer.done.load(.SeqCst)) break;
+        if (!remuxer.running.load(.monotonic)) break;
         remuxer.cond.wait(&remuxer.mutex);
     }
     remuxer.ring_buffer.writeAssumeCapacity(slice);
@@ -176,7 +176,7 @@ fn readCallback(userdata: ?*anyopaque, buf: [*c]u8, buf_size: c_int) callconv(.C
     const remuxer: *Remuxer = @ptrCast(@alignCast(userdata.?));
     remuxer.mutex.lock();
     while (remuxer.ring_buffer.readableLength() == 0) {
-        if (remuxer.done.load(.SeqCst)) return c.AVERROR_EOF;
+        if (!remuxer.running.load(.monotonic)) return c.AVERROR_EOF;
         remuxer.cond.wait(&remuxer.mutex);
     }
     const read_size = remuxer.ring_buffer.read(buf[0..@intCast(buf_size)]);

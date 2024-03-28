@@ -4,21 +4,20 @@ const c = @cImport({
 });
 const Remuxer = @import("Remuxer.zig");
 
-const os = std.os;
+const posix = std.posix;
 const log = std.log.scoped(.srt);
 
 const SRTServer = @This();
 
-const SRT_RFDS_LEN_MAX = 100;
-const kernel_backlog = 10;
+const MAX_CONNECTIONS = 100;
+const KERNEL_BACKLOG = 10;
 
 sfd: c.SRTSOCKET,
 epid: c_int,
 allocator: std.mem.Allocator,
-remuxer: Remuxer,
-sockets: [SRT_RFDS_LEN_MAX]c.SRTSOCKET = undefined,
+running: std.atomic.Value(bool) = .{ .raw = true },
+connections: std.AutoHashMapUnmanaged(c.SRTSOCKET, Connection) = .{},
 recv_buf: [1316]u8 = undefined,
-threads: std.ArrayListUnmanaged(std.Thread) = .{},
 
 pub fn init(allocator: std.mem.Allocator, port: u16) !SRTServer {
     _ = c.srt_startup();
@@ -29,8 +28,8 @@ pub fn init(allocator: std.mem.Allocator, port: u16) !SRTServer {
     var addr: *c.addrinfo = undefined;
     if (c.getaddrinfo(null, port_str, &.{
         .ai_flags = 1, // AI_PASSIVE
-        .ai_family = std.os.AF.INET,
-        .ai_socktype = std.os.SOCK.DGRAM,
+        .ai_family = posix.AF.INET,
+        .ai_socktype = posix.SOCK.DGRAM,
         .ai_protocol = 0,
         .ai_addrlen = 0,
         .ai_addr = null,
@@ -44,37 +43,37 @@ pub fn init(allocator: std.mem.Allocator, port: u16) !SRTServer {
 
     const sfd = c.srt_create_socket();
     if (sfd == c.SRT_INVALID_SOCK) {
-        logErr();
+        log.err("{s}", .{err_msg()});
         return error.SystemResources;
     }
 
     var opt_value = false;
     if (c.srt_setsockopt(sfd, 0, c.SRTO_RCVSYN, &opt_value, @sizeOf(bool)) == c.SRT_ERROR) {
-        logErr();
+        log.err("{s}", .{err_msg()});
         return error.SystemResources;
     }
 
     if (c.srt_bind(sfd, addr.ai_addr, @intCast(addr.ai_addrlen)) == c.SRT_ERROR) {
-        logErr();
+        log.err("{s}", .{err_msg()});
         return error.SystemResources;
     }
 
     log.info("SRT Server is listening on 127.0.0.1:{}", .{port});
 
-    if (c.srt_listen(sfd, kernel_backlog) == c.SRT_ERROR) {
-        logErr();
+    if (c.srt_listen(sfd, KERNEL_BACKLOG) == c.SRT_ERROR) {
+        log.err("{s}", .{err_msg()});
         return error.SystemResources;
     }
 
     const epid = c.srt_epoll_create();
     if (epid < 0) {
-        logErr();
+        log.err("{s}", .{err_msg()});
         return error.SystemResources;
     }
 
-    var events = c.SRT_EPOLL_IN | c.SRT_EPOLL_ERR;
+    var events = c.SRT_EPOLL_IN | c.SRT_EPOLL_ERR | (-@as(c_int, @intCast(~c.SRT_EPOLL_ET)) - 1);
     if (c.srt_epoll_add_usock(epid, sfd, &events) == c.SRT_ERROR) {
-        logErr();
+        log.err("{s}", .{err_msg()});
         return error.SystemResources;
     }
 
@@ -82,108 +81,120 @@ pub fn init(allocator: std.mem.Allocator, port: u16) !SRTServer {
         .allocator = allocator,
         .sfd = sfd,
         .epid = epid,
-        .remuxer = try Remuxer.init(allocator),
     };
 }
 
 pub fn deinit(srt: *SRTServer) void {
-    for (srt.threads.items) |thread| thread.join();
-    srt.threads.deinit(srt.allocator);
-
     _ = c.srt_close(srt.sfd);
     _ = c.srt_epoll_release(srt.epid);
     _ = c.srt_cleanup();
 }
 
-pub fn tick(srt: *SRTServer) !void {
-    var sockets_len: c_int = srt.sockets.len;
-    const ready_sockets = c.srt_epoll_wait(srt.epid, &srt.sockets, &sockets_len, 0, 0, 100, 0, 0, 0, 0);
-    if (ready_sockets < 0) return;
-    std.debug.assert(ready_sockets <= sockets_len);
+pub fn stop(srt: *SRTServer) void {
+    var conns = srt.connections.valueIterator();
+    while (conns.next()) |conn| conn.remuxer.stop();
+    srt.running.store(false, .release);
+}
 
-    for (srt.sockets[0..@intCast(ready_sockets)]) |s| {
-        const status = c.srt_getsockstate(s);
+pub fn run(srt: *SRTServer) !void {
+    var sockets: [MAX_CONNECTIONS]c.SRTSOCKET = undefined;
+    var sockets_len: c_int = sockets.len;
 
-        switch (status) {
-            c.SRTS_INIT, c.SRTS_OPENED, c.SRTS_CLOSING, c.SRTS_CONNECTING => {},
-            c.SRTS_BROKEN, c.SRTS_NONEXIST, c.SRTS_CLOSED => {
-                log.err("Connection closed with status ({d})", .{status});
-                srt.remuxer.stop();
-                _ = c.srt_close(s);
-                continue;
-            },
-            c.SRTS_LISTENING => {
-                std.debug.assert(s == srt.sfd);
+    while (srt.running.load(.monotonic)) {
+        const ready_sockets = c.srt_epoll_wait(srt.epid, &sockets, &sockets_len, 0, 0, 100, 0, 0, 0, 0);
+        if (ready_sockets < 0) continue;
+        std.debug.assert(ready_sockets <= sockets_len);
 
-                var fhandle: c.SRTSOCKET = undefined;
-                var clientaddr: c.sockaddr_storage = undefined;
-                var addrlen: c_int = @sizeOf(c.sockaddr_storage);
+        for (sockets[0..@intCast(ready_sockets)]) |s| {
+            const status = c.srt_getsockstate(s);
 
-                fhandle = c.srt_accept(srt.sfd, @ptrCast(&clientaddr), &addrlen);
-                if (fhandle == c.SRT_INVALID_SOCK) {
-                    logErr();
-                    return error.SystemResources;
-                }
+            switch (status) {
+                c.SRTS_INIT, c.SRTS_OPENED, c.SRTS_CLOSING, c.SRTS_CONNECTING => {},
+                c.SRTS_BROKEN, c.SRTS_NONEXIST, c.SRTS_CLOSED => {
+                    log.warn("Connection closed with status ({d})", .{status});
+                    const conn = srt.connections.getPtr(s).?;
+                    conn.remuxer.stop();
+                    _ = srt.connections.remove(s);
+                    _ = c.srt_close(s);
+                    continue;
+                },
+                c.SRTS_LISTENING => {
+                    std.debug.assert(s == srt.sfd);
 
-                var client_ip: [c.NI_MAXHOST]u8 = undefined;
-                var client_port: [c.NI_MAXSERV]u8 = undefined;
-                _ = c.getnameinfo(
-                    @ptrCast(&clientaddr),
-                    @intCast(addrlen),
-                    &client_ip,
-                    client_ip.len,
-                    &client_port,
-                    client_port.len,
-                    c.NI_NUMERICHOST | c.NI_NUMERICSERV,
-                );
-                log.info("New connection: {s}:{s}", .{ std.mem.sliceTo(&client_ip, 0), std.mem.sliceTo(&client_port, 0) });
+                    var fhandle: c.SRTSOCKET = undefined;
+                    var clientaddr: c.sockaddr_storage = undefined;
+                    var addrlen: c_int = @sizeOf(c.sockaddr_storage);
 
-                const exe_dir_path = try std.fs.selfExeDirPathAlloc(srt.allocator);
-                defer srt.allocator.free(exe_dir_path);
-                var exe_dir = try std.fs.cwd().openDir(exe_dir_path, .{});
-                defer exe_dir.close();
-                try exe_dir.makePath("live");
-                // const name = std.fmt.allocPrintZ(srt.allocator, "zig-out/bin/live/stream-{d}.m3u8", .{con_i});
-                _ = try std.Thread.spawn(.{}, Remuxer.remux, .{ &srt.remuxer, "zig-out/bin/live/stream.m3u8" });
-
-                var events = c.SRT_EPOLL_IN | c.SRT_EPOLL_ERR;
-                if (c.srt_epoll_add_usock(srt.epid, fhandle, &events) == c.SRT_ERROR) {
-                    logErr();
-                    return error.SystemResources;
-                }
-            },
-            c.SRTS_CONNECTED => {
-                while (true) {
-                    const read = c.srt_recvmsg(s, &srt.recv_buf, srt.recv_buf.len);
-                    if (read == c.SRT_ERROR) {
-                        // EAGAIN
-                        if (c.srt_getlasterror(null) != c.SRT_EASYNCRCV) {
-                            logErr();
-                            return error.SystemResources;
-                        }
-                        break;
+                    fhandle = c.srt_accept(srt.sfd, @ptrCast(&clientaddr), &addrlen);
+                    if (fhandle == c.SRT_INVALID_SOCK) {
+                        log.warn("{s}", .{err_msg()});
+                        continue;
                     }
 
-                    try srt.remuxer.write(srt.recv_buf[0..@intCast(read)]);
-                }
-            },
-            else => unreachable,
+                    // c.srt_getsockflag(fhandle, )
+
+                    var client_ip: [c.NI_MAXHOST]u8 = undefined;
+                    var client_port: [c.NI_MAXSERV]u8 = undefined;
+                    _ = c.getnameinfo(
+                        @ptrCast(&clientaddr),
+                        @intCast(addrlen),
+                        &client_ip,
+                        client_ip.len,
+                        &client_port,
+                        client_port.len,
+                        c.NI_NUMERICHOST | c.NI_NUMERICSERV,
+                    );
+                    log.info("New connection: {s}:{s}", .{ std.mem.sliceTo(&client_ip, 0), std.mem.sliceTo(&client_port, 0) });
+
+                    const gop = try srt.connections.getOrPut(srt.allocator, fhandle);
+                    std.debug.assert(!gop.found_existing);
+                    gop.value_ptr.* = .{
+                        .remuxer = try Remuxer.init(srt.allocator),
+                    };
+
+                    const exe_dir_path = try std.fs.selfExeDirPathAlloc(srt.allocator);
+                    defer srt.allocator.free(exe_dir_path);
+                    var exe_dir = try std.fs.cwd().openDir(exe_dir_path, .{});
+                    defer exe_dir.close();
+                    try exe_dir.makePath("live");
+                    var rand = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+                    const name = try std.fmt.allocPrintZ(srt.allocator, "zig-out/bin/live/stream-{d}-.m3u8", .{rand.random().int(u8)});
+                    _ = try std.Thread.spawn(.{}, Remuxer.remux, .{ &gop.value_ptr.remuxer, name });
+
+                    var events = c.SRT_EPOLL_IN | c.SRT_EPOLL_ERR | (-@as(c_int, @intCast(~c.SRT_EPOLL_ET)) - 1);
+                    if (c.srt_epoll_add_usock(srt.epid, fhandle, &events) == c.SRT_ERROR) {
+                        log.warn("{s}", .{err_msg()});
+                        continue;
+                    }
+                },
+                c.SRTS_CONNECTED => {
+                    while (true) {
+                        const read = c.srt_recvmsg(s, &srt.recv_buf, srt.recv_buf.len);
+                        if (read == c.SRT_ERROR) {
+                            // EAGAIN
+                            if (c.srt_getlasterror(null) != c.SRT_EASYNCRCV) {
+                                log.warn("{s}", .{err_msg()});
+                                continue;
+                            }
+                            break;
+                        }
+
+                        const conn = srt.connections.getPtr(s).?;
+                        try conn.remuxer.write(srt.recv_buf[0..@intCast(read)]);
+                    }
+                },
+                else => unreachable,
+            }
         }
     }
 }
 
-const Client = struct {
-    stream: std.net.Stream,
+const Connection = struct {
+    remuxer: Remuxer,
 };
 
-fn handle_conn(client: *Client) void {
-    _ = client;
-}
-
-fn logErr() void {
+fn err_msg() [:0]const u8 {
     const err = c.srt_getlasterror_str();
     std.debug.assert(err != c.SRT_SUCCESS);
-
-    const err_str = std.mem.span(err);
-    log.err("{s}", .{err_str});
+    return std.mem.span(err);
 }

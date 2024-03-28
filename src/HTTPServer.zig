@@ -1,7 +1,7 @@
 const std = @import("std");
 const IO = @import("iofthetiger").IO;
 
-const os = std.os;
+const posix = std.posix;
 const log = std.log.scoped(.http);
 
 const HTTPServer = @This();
@@ -13,15 +13,15 @@ const io_entries = 256;
 allocator: std.mem.Allocator,
 io: IO,
 address: std.net.Address,
-socket: os.socket_t,
+socket: posix.socket_t,
 accepting: bool = true,
 
 pub fn init(allocator: std.mem.Allocator, address: std.net.Address) !HTTPServer {
     var io = try IO.init(io_entries, 0);
-    const socket = try io.open_socket(address.any.family, os.SOCK.STREAM, os.IPPROTO.TCP);
-    try os.setsockopt(socket, os.SOL.SOCKET, os.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
-    try os.bind(socket, &address.any, address.getOsSockLen());
-    try os.listen(socket, kernel_backlog);
+    const socket = try io.open_socket(address.any.family, posix.SOCK.STREAM, posix.IPPROTO.TCP);
+    try posix.setsockopt(socket, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+    try posix.bind(socket, &address.any, address.getOsSockLen());
+    try posix.listen(socket, kernel_backlog);
 
     log.info("HTTP Server is listening on {}.", .{address});
 
@@ -34,7 +34,7 @@ pub fn init(allocator: std.mem.Allocator, address: std.net.Address) !HTTPServer 
 }
 
 pub fn deinit(server: *HTTPServer) void {
-    os.close(server.socket);
+    posix.close(server.socket);
     server.io.deinit();
 }
 
@@ -52,7 +52,7 @@ pub fn tick(server: *HTTPServer) !void {
 fn accept_callback(
     server: *HTTPServer,
     completion: *IO.Completion,
-    result: IO.AcceptError!os.socket_t,
+    result: IO.AcceptError!posix.socket_t,
 ) void {
     _ = completion;
 
@@ -80,7 +80,7 @@ fn accept_callback(
 const Client = struct {
     server: *HTTPServer,
     io: *IO,
-    socket: os.socket_t,
+    socket: posix.socket_t,
     completion: IO.Completion = undefined,
     recv_buf: [recv_buf_len]u8 = undefined,
     resp_buf: [2048]u8 = undefined,

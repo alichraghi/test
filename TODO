@@ -1,6 +1,6 @@
-[ ] Multi-threading in SRT
-[ ] Serve files in HTTP Server
+[ ] ~~Multi-threading in SRT~~
+[ ] Serve files in HTTP Server (https://github.com/kristoff-it/zine/blob/main/zine/server/main.zig)
 [ ] REST API in HTTP Server
-    - [ ] Setup a DB
+    - [ ] Setup [DuckDB?](https://github.com/karlseguin/zuckdb.zig)
     - [ ] Authentication
 [ ] FrontEnd

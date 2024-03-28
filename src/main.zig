@@ -9,7 +9,7 @@ const log = std.log.scoped(.gael);
 var fba_buf: [8 * 1024 * 1024]u8 = undefined; // 8MB
 var fba = std.heap.FixedBufferAllocator.init(&fba_buf);
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-const allocator = if (builtin.mode == .Debug) gpa.allocator() else fba.allocator();
+const allocator = if (builtin.mode == .Debug) gpa.allocator() else fba.threadSafeAllocator();
 
 var running = std.atomic.Value(bool).init(true);
 
@@ -23,7 +23,7 @@ pub fn main() !void {
     var http_server = try HTTPServer.init(allocator, http_address);
     defer http_server.deinit();
 
-    while (running.load(.Monotonic)) {
+    while (running.load(.monotonic)) {
         try http_server.tick();
     }
 }
@@ -31,14 +31,9 @@ pub fn main() !void {
 fn srt_server_thread() void {
     var srt_server = SRTServer.init(allocator, 9000) catch |err| {
         log.err("Initializing SRT Server failed: {s}", .{@errorName(err)});
-        running.store(false, .Monotonic);
+        running.store(false, .monotonic);
         return;
     };
     defer srt_server.deinit();
-
-    while (running.load(.Monotonic)) {
-        srt_server.tick() catch |err| {
-            log.warn("SRT Server: {s}", .{@errorName(err)});
-        };
-    }
+    srt_server.run() catch unreachable;
 }
