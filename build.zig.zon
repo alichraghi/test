@@ -3,11 +3,11 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.12.0-dev.3152+90c1a2c41",
     .dependencies = .{
-        .iofthetiger = .{
-            .url = "https://codeberg.org/alichraghi/iofthetiger/archive/2e40e2721f4a95ed319f9a7492b39ccf4b4cc999.tar.gz",
-            .hash = "122034a97d0278172933b208a9d25f4bb1c326897a13f5961f9fce3dcf21ff3cef39",
-        },
         .srt = .{ .path = "../srt" },
+        .mime = .{
+            .url = "https://github.com/andrewrk/mime/archive/ef4381c6a739ca9d44fb7aa6b14c66e1fba2e16d.tar.gz",
+            .hash = "12204cfebcccb9fb8a5c7b4a6ec663aea691d180f7d346d36f213b4e154a6be1f823",
+        },
         .ffmpeg = .{
             .url = "https://github.com/andrewrk/ffmpeg/archive/1e6d0c945d4d6c6e2feab9720df12292b092d1be.tar.gz",
             .hash = "1220c9efb7f1e554a922a2f4f151c07b56571a254713006924dea17361c7471ba320",

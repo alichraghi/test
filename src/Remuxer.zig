@@ -1,3 +1,5 @@
+//! Thread-safe, Multi-Threaded (by libav) Remuxer that converts an H.264/AAC stream into MPEG-TS files
+
 const std = @import("std");
 const builtin = @import("builtin");
 const c = @cImport({
@@ -16,7 +18,7 @@ const log = std.log.scoped(.remuxer);
 
 mutex: std.Thread.Mutex = .{},
 cond: std.Thread.Condition = .{},
-running: std.atomic.Value(bool) = .{ .raw = false },
+running: std.atomic.Value(bool) = .{ .raw = true },
 allocator: std.mem.Allocator,
 ring_buffer: RingBuffer,
 
@@ -25,6 +27,11 @@ pub fn init(allocator: std.mem.Allocator) !Remuxer {
         .allocator = allocator,
         .ring_buffer = RingBuffer.init(),
     };
+}
+
+pub fn deinit(remuxer: *Remuxer) void {
+    remuxer.running.store(false, .release);
+    remuxer.cond.broadcast();
 }
 
 pub fn remux(remuxer: *Remuxer, output_path: [:0]const u8) !void {
@@ -126,7 +133,7 @@ pub fn remux(remuxer: *Remuxer, output_path: [:0]const u8) !void {
     var pkt = c.av_packet_alloc() orelse return error.OutOfMemory;
     defer c.av_packet_free(&pkt);
 
-    while (true) {
+    while (remuxer.running.load(.monotonic)) {
         if (c.av_read_frame(ifmt_ctx, pkt) < 0) break;
 
         defer c.av_packet_unref(pkt);
@@ -157,31 +164,34 @@ pub fn remux(remuxer: *Remuxer, output_path: [:0]const u8) !void {
     _ = c.av_write_trailer(ofmt_ctx);
 }
 
-pub fn stop(remuxer: *Remuxer) void {
-    remuxer.running.store(false, .release);
-}
-
 pub fn write(remuxer: *Remuxer, slice: []const u8) !void {
     remuxer.mutex.lock();
+    defer {
+        remuxer.mutex.unlock();
+        remuxer.cond.signal();
+    }
+
     while (remuxer.ring_buffer.writableLength() < slice.len) {
         if (!remuxer.running.load(.monotonic)) break;
         remuxer.cond.wait(&remuxer.mutex);
     }
     remuxer.ring_buffer.writeAssumeCapacity(slice);
-    remuxer.mutex.unlock();
-    remuxer.cond.signal();
 }
 
 fn readCallback(userdata: ?*anyopaque, buf: [*c]u8, buf_size: c_int) callconv(.C) c_int {
     const remuxer: *Remuxer = @ptrCast(@alignCast(userdata.?));
+
     remuxer.mutex.lock();
+    defer {
+        remuxer.mutex.unlock();
+        remuxer.cond.signal();
+    }
+
     while (remuxer.ring_buffer.readableLength() == 0) {
         if (!remuxer.running.load(.monotonic)) return c.AVERROR_EOF;
         remuxer.cond.wait(&remuxer.mutex);
     }
     const read_size = remuxer.ring_buffer.read(buf[0..@intCast(buf_size)]);
-    remuxer.mutex.unlock();
-    remuxer.cond.signal();
     return @intCast(read_size);
 }
 

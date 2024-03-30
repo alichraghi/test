@@ -4,7 +4,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const iofthetiger = b.dependency("iofthetiger", .{ .target = target, .optimize = optimize });
+    const mime = b.dependency("mime", .{ .target = target, .optimize = optimize });
     const srt = b.dependency("srt", .{ .target = target, .optimize = optimize });
     const ffmpeg = b.dependency("ffmpeg", .{ .target = target, .optimize = optimize });
 
@@ -14,19 +14,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("iofthetiger", iofthetiger.module("io"));
     exe.linkLibrary(srt.artifact("srt"));
     exe.linkLibrary(ffmpeg.artifact("ffmpeg"));
+    exe.root_module.addImport("mime", mime.module("mime"));
+    exe.root_module.addAnonymousImport("index.html", .{ .root_source_file = .{ .path = "static/index.html" } });
+    exe.root_module.addAnonymousImport("not_found.html", .{ .root_source_file = .{ .path = "static/not_found.html" } });
+    exe.root_module.addAnonymousImport("internal_error.html", .{ .root_source_file = .{ .path = "static/internal_error.html" } });
     b.installArtifact(exe);
-
-    // const transcode = b.addExecutable(.{
-    //     .name = "transcode",
-    //     .root_source_file = .{ .path = "transcode.zig" },
-    //     .target = target,
-    //     .optimize = optimize,
-    // });
-    // transcode.linkLibrary(ffmpeg.artifact("ffmpeg"));
-    // b.installArtifact(transcode);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
