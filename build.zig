@@ -4,9 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const mime = b.dependency("mime", .{ .target = target, .optimize = optimize });
     const srt = b.dependency("srt", .{ .target = target, .optimize = optimize });
     const ffmpeg = b.dependency("ffmpeg", .{ .target = target, .optimize = optimize });
+    const sqlite = b.dependency("sqlite", .{ .target = target, .optimize = optimize });
+    const mime = b.dependency("mime", .{ .target = target, .optimize = optimize });
 
     const exe = b.addExecutable(.{
         .name = "gael",
@@ -20,6 +21,11 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addAnonymousImport("index.html", .{ .root_source_file = .{ .path = "static/index.html" } });
     exe.root_module.addAnonymousImport("not_found.html", .{ .root_source_file = .{ .path = "static/not_found.html" } });
     exe.root_module.addAnonymousImport("internal_error.html", .{ .root_source_file = .{ .path = "static/internal_error.html" } });
+
+    //  SQlite
+    exe.addIncludePath(sqlite.path(""));
+    exe.addCSourceFile(.{ .file = sqlite.path("sqlite3.c") });
+
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);

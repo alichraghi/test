@@ -3,14 +3,21 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.12.0-dev.3152+90c1a2c41",
     .dependencies = .{
-        .srt = .{ .path = "../srt" },
-        .mime = .{
-            .url = "https://github.com/andrewrk/mime/archive/ef4381c6a739ca9d44fb7aa6b14c66e1fba2e16d.tar.gz",
-            .hash = "12204cfebcccb9fb8a5c7b4a6ec663aea691d180f7d346d36f213b4e154a6be1f823",
+        .srt = .{
+            .url = "https://github.com/Haivision/srt/archive/fe0cebe06c09d34e9a1d05d26695c4da47f526f8.tar.gz",
+            .hash = "122058ba2c130dc160ba4812d94d6927fc8329c9470122138bdb5798810a1aed82fd",
         },
         .ffmpeg = .{
             .url = "https://github.com/andrewrk/ffmpeg/archive/1e6d0c945d4d6c6e2feab9720df12292b092d1be.tar.gz",
             .hash = "1220c9efb7f1e554a922a2f4f151c07b56571a254713006924dea17361c7471ba320",
+        },
+        .sqlite = .{
+            .url = "https://sqlite.org/snapshot/sqlite-snapshot-202404051413.tar.gz",
+            .hash = "1220f1adba30340e5e198f5455aee207ccc67c62c3c83178531c94a43ebc3829849a",
+        },
+        .mime = .{
+            .url = "https://github.com/andrewrk/mime/archive/ef4381c6a739ca9d44fb7aa6b14c66e1fba2e16d.tar.gz",
+            .hash = "12204cfebcccb9fb8a5c7b4a6ec663aea691d180f7d346d36f213b4e154a6be1f823",
         },
     },
     .paths = .{
