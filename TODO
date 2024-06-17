@@ -1,5 +1,5 @@
 [ ] No unhandled error
 [ ] REST API in HTTP Server
-    - [ ] Setup [DuckDB?](https://github.com/karlseguin/zuckdb.zig)
+    - [ ] SQLITE https://zetcode.com/db/sqlitec/
     - [ ] Authentication
 [ ] FrontEnd

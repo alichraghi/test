@@ -15,6 +15,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe.linkSystemLibrary("curl");
     exe.linkLibrary(srt.artifact("srt"));
     exe.linkLibrary(ffmpeg.artifact("ffmpeg"));
     exe.root_module.addImport("mime", mime.module("mime"));

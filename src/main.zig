@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const HTTPServer = @import("HTTPServer.zig");
 const SRTServer = @import("SRTServer.zig");
 const Database = @import("Database.zig");
+const Email = @import("Email.zig");
 
 const log = std.log.scoped(.gael);
 const Hash = std.crypto.auth.hmac.sha2.HmacSha256;
@@ -25,10 +26,10 @@ pub fn main() !void {
     const db = try Database.init();
     try db.setup();
 
-    const insert_stmt = try db.prepare(Database.INSERT_USER);
-    defer insert_stmt.deinit();
-    try insert_stmt.bind(.{ 0, "ali", "123" });
-    try insert_stmt.exec();
+    // const insert_stmt = try db.prepare(Database.INSERT_USER);
+    // defer insert_stmt.deinit();
+    // try insert_stmt.bind(.{ 0, "ali", "123" });
+    // try insert_stmt.exec();
 
     const User = struct {
         id: i32,
@@ -40,6 +41,12 @@ pub fn main() !void {
     defer select_stmt.deinit();
     const user = select_stmt.row(User) orelse unreachable;
     log.info("id: {}, name: {s}, pass: {s}", .{ user.id, user.name, user.password });
+
+    try Email.send(.{
+        .server = "smtps://smtp.gmail.com:465",
+        .mail = "chraghiali1@gmail.com",
+        .userpwd = "chraghiali1@gmail.com:jxgn yopm rqig ugij",
+    }, "alichraghi@proton.me");
 
     // SRT-Server
     var srt_server = SRTServer.init(allocator, 9000) catch |err| {

@@ -100,7 +100,7 @@ pub const CREATE_TABLES =
 ;
 
 pub const INSERT_USER =
-    \\INSERT INTO users(id, username, password) VALUES(?, ?, ?);
+    \\INSERT INTO users(id, username, email, password) VALUES(?, ?, ?);
 ;
 
 pub const SELECT_USERS =
